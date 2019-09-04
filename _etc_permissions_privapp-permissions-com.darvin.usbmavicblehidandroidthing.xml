@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<permissions>
+  <privapp-permissions package="com.darvin.usbmavicblehidandroidthing">
+    <permission name="android.permission.BLUETOOTH" />
+    <permission name="android.permission.BLUETOOTH_ADMIN" />
+    <permission name="android.permission.BLUETOOTH_PRIVILEGED" />
+
+    <permission name="com.google.android.things.permission.MANAGE_BLUETOOTH" />
+
+  </privapp-permissions>
+</permissions>
