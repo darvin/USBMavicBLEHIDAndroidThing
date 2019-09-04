@@ -23,10 +23,9 @@ import android.content.IntentFilter;
 import android.os.Build.VERSION_CODES;
 import android.os.Handler;
 import android.os.ParcelUuid;
-import android.util.Log;
-
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import android.util.Log;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
@@ -40,6 +39,8 @@ import java.util.Timer;
 import java.util.TimerTask;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.function.Consumer;
 
 import jp.kshoji.blehid.util.BleUuidUtils;
 
@@ -124,7 +125,7 @@ public abstract class HidPeripheral {
     protected static byte MSB(final int value) {
         return (byte) (value >> 8 & 0xff);
     }
-    
+
     /**
      * Device Information Service
      */
@@ -159,7 +160,7 @@ public abstract class HidPeripheral {
      * @return Report Map data
      */
     protected abstract byte[] getReportMap();
-    
+
     /**
      * HID Input Report
      */
@@ -197,6 +198,31 @@ public abstract class HidPeripheral {
     private BluetoothGattServer gattServer;
     private final Map<String, BluetoothDevice> bluetoothDevicesMap = new HashMap<>();
 
+    private Queue<BluetoothGattService> servicesToAdd = new LinkedBlockingQueue<>();
+
+    public class ConnectionState {
+        public BluetoothDevice device;
+        public int status;
+        public int newState;
+
+        public ConnectionState(BluetoothDevice device, int status, int newState) {
+            this.device = device;
+            this.status = status;
+            this.newState = newState;
+        }
+    }
+
+    public void setConnectionStateCallback(Consumer<ConnectionState> connectionStateCallback) {
+        this.connectionStateCallback = connectionStateCallback;
+    }
+
+    private Consumer<ConnectionState> connectionStateCallback = new Consumer<ConnectionState>() {
+        @Override
+        public void accept(ConnectionState connectionState) {
+            // do nothing
+        }
+    };
+
     /**
      * Constructor<br />
      * Before constructing the instance, check the Bluetooth availability.
@@ -223,12 +249,6 @@ public abstract class HidPeripheral {
             throw new UnsupportedOperationException("Bluetooth is disabled.");
         }
 
-//        Log.d(TAG, "isMultipleAdvertisementSupported:" + bluetoothAdapter.isMultipleAdvertisementSupported());
-//        if (!bluetoothAdapter.isMultipleAdvertisementSupported()) {
-//            throw new UnsupportedOperationException("Bluetooth LE Advertising not supported on this device.");
-//        }
-
-        bluetoothAdapter.setName("rpiJoy");
         bluetoothLeAdvertiser = bluetoothAdapter.getBluetoothLeAdvertiser();
         Log.d(TAG, "bluetoothLeAdvertiser: " + bluetoothLeAdvertiser);
         if (bluetoothLeAdvertiser == null) {
@@ -241,10 +261,12 @@ public abstract class HidPeripheral {
         }
 
         // setup services
+        servicesToAdd.add(setUpDeviceInformationService());
+
         addService(setUpHidService(needInputReport, needOutputReport, needFeatureReport));
-//        addService(setUpDeviceInformationService());
+
 //        addService(setUpBatteryService());
-        
+
         // send report each dataSendingRate, if data available
         new Timer().scheduleAtFixedRate(new TimerTask() {
             @Override
@@ -287,6 +309,7 @@ public abstract class HidPeripheral {
                 Log.d(TAG, "Adding Service failed", e);
             }
         }
+
         Log.d(TAG, "Service: " + service.getUuid() + " added.");
     }
 
@@ -456,31 +479,30 @@ public abstract class HidPeripheral {
             public void run() {
                 // set up advertising setting
                 final AdvertiseSettings advertiseSettings = new AdvertiseSettings.Builder()
-                        .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_MEDIUM)
+                        .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
                         .setConnectable(true)
                         .setTimeout(0)
-                        .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_BALANCED)
+                        .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
                         .build();
 
                 // set up advertising data
                 final AdvertiseData advertiseData = new Builder()
                         .setIncludeTxPowerLevel(false)
                         .setIncludeDeviceName(true)
-                        .addServiceUuid(new ParcelUuid(SERVICE_DEVICE_INFORMATION))
-                        .addServiceUuid(new ParcelUuid(SERVICE_BATTERY))
-                        .addServiceUuid(new ParcelUuid(SERVICE_BLE_HID))
+                        .addServiceUuid(ParcelUuid.fromString(SERVICE_DEVICE_INFORMATION.toString()))
+                        .addServiceUuid(ParcelUuid.fromString(SERVICE_BLE_HID.toString()))
+                        .addServiceUuid(ParcelUuid.fromString(SERVICE_BATTERY.toString()))
                         .build();
 
-//                 set up scan result
-                final AdvertiseData scanResult = new Builder()
-                        .setIncludeDeviceName(true)
-                        .addServiceUuid(new ParcelUuid(SERVICE_DEVICE_INFORMATION))
-                        .addServiceUuid(new ParcelUuid(SERVICE_BATTERY))
-                        .addServiceUuid(new ParcelUuid(SERVICE_BLE_HID))
-                        .build();
+                // set up scan result
+//                final AdvertiseData scanResult = new Builder()
+//                        .addServiceUuid(ParcelUuid.fromString(SERVICE_DEVICE_INFORMATION.toString()))
+//                        .addServiceUuid(ParcelUuid.fromString(SERVICE_BLE_HID.toString()))
+//                        .addServiceUuid(ParcelUuid.fromString(SERVICE_BATTERY.toString()))
+//                        .build();
 
 //                Log.d(TAG, "advertiseData: " + advertiseData + ", scanResult: " + scanResult);
-                bluetoothLeAdvertiser.startAdvertising(advertiseSettings, advertiseData, scanResult, advertiseCallback);
+                bluetoothLeAdvertiser.startAdvertising(advertiseSettings, advertiseData, advertiseCallback);
             }
         });
     }
@@ -620,6 +642,8 @@ public abstract class HidPeripheral {
                             bluetoothDevicesMap.put(device.getAddress(), device);
                         }
                     }
+
+                    connectionStateCallback.accept(new ConnectionState(device, status, newState));
                     break;
 
                 case BluetoothProfile.STATE_DISCONNECTED:
@@ -635,10 +659,11 @@ public abstract class HidPeripheral {
                             }
                         }
                     });
-                    
+
                     synchronized (bluetoothDevicesMap) {
                         bluetoothDevicesMap.remove(deviceAddress);
                     }
+                    connectionStateCallback.accept(new ConnectionState(device, status, newState));
                     break;
 
                 default:
@@ -774,6 +799,14 @@ public abstract class HidPeripheral {
 
             if (status != 0) {
                 Log.d(TAG, "onServiceAdded Adding Service failed..");
+            }
+
+            if (servicesToAdd.peek() != null) {
+                addService(servicesToAdd.remove());
+            } else {
+                //finished adding services, now advertise
+                startAdvertising();
+
             }
         }
     };

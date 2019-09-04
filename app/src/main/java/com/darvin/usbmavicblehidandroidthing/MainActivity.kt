@@ -36,7 +36,7 @@ class MainActivity : AbstractBleActivity() {
     override fun setupBlePeripheralProvider() {
         joystick = JoystickPeripheral(this)
         joystick.setDeviceName("rpijoy")
-        joystick.startAdvertising()
+//        joystick.startAdvertising()
 
     }
 
